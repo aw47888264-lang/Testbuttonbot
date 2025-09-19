@@ -811,9 +811,10 @@ const mainMessageHandler = async (ctx) => {
                     try {
                         const botOwnedPoll = await ctx.copyMessage(ctx.chat.id);
                         newMessageObject = {
-                            type: "poll",
-                            from_chat_id: botOwnedPoll.chat.id,
-                            message_id: botOwnedPoll.message_id
+                            type: "poll", // نوع مخصص للتمييز
+                            content: String(botOwnedPoll.message_id), // تخزين message_id في content
+                            caption: String(botOwnedPoll.chat.id),    // تخزين chat_id في caption
+                            entities: [] // قيمة افتراضية فارغة
                         };
                     } catch(e) {
                         console.error("Failed to handle and copy poll:", e);
