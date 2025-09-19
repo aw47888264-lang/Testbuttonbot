@@ -1462,19 +1462,37 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 return;
             }
 
-            if (state === 'AWAITING_BROADCAST') {
-                const allUsersResult = await client.query('SELECT id FROM public.users WHERE banned = false');
-                const allUsers = allUsersResult.rows;
-                let successCount = 0; let failureCount = 0;
-                const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.length} مستخدم...`);
-                for (const user of allUsers) {
-                    try { await ctx.copyMessage(user.id); successCount++; } 
-                    catch (e) { failureCount++; console.error(`Failed to broadcast to user ${user.id}:`, e.message); }
-                }
-                await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
-                await updateUserState(userId, { state: 'NORMAL' });
-                return;
+           // الكود الجديد والمصحح
+if (state === 'AWAITING_BROADCAST') {
+    const allUsersResult = await client.query('SELECT id FROM public.users WHERE banned = false');
+    const allUsers = allUsersResult.rows;
+    let successCount = 0;
+    let failureCount = 0;
+    const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.length} مستخدم...`);
+
+    // التحقق إذا كانت الرسالة استطلاعًا
+    const isPoll = !!ctx.message.poll;
+
+    for (const user of allUsers) {
+        try {
+            if (isPoll) {
+                // استخدم forwardMessage للاستطلاعات للحفاظ على التفاعلية
+                await bot.telegram.forwardMessage(user.id, ctx.chat.id, ctx.message.message_id);
+            } else {
+                // استخدم copyMessage لباقي أنواع الرسائل لإخفاء هوية المرسل
+                await ctx.copyMessage(user.id);
             }
+            successCount++;
+        } catch (e) {
+            failureCount++;
+            console.error(`Failed to broadcast to user ${user.id}:`, e.message);
+        }
+    }
+
+    await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
+    await updateUserState(userId, { state: 'NORMAL' });
+    return;
+}
 
             if (state === 'AWAITING_WELCOME_MESSAGE') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال رسالة نصية فقط.');
