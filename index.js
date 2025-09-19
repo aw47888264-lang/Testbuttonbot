@@ -13,7 +13,7 @@ const { Redis } = require('@upstash/redis');
 // الاتصال بـ Upstash Redis (الطريقة الجديدة والموصى بها)
 const redis = new Redis({
   url: process.env.KV_REST_API_URL,
-  token: process.env.KV_REST_API_TOKEN,
+  token: process.env.KV_REST_API_TOKENCorrect,
 });
 
 // الاتصال بقاعدة بيانات Supabase (PostgreSQL)
