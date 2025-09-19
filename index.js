@@ -757,7 +757,7 @@ bot.command('scan_errors', async (ctx) => {
                 await bot.telegram.getFile(message.content);
             } catch (e) {
                 // إذا فشلت، فهذا يعني أن الملف خاطئ
-                if (e.message.includes('file is invalid')) {
+                if (e.message.includes('file is invalid') || e.message.includes('wrong file identifier')) {
                     const path = await getButtonPath(message.button_id, client);
                     brokenFilePaths.push(path);
                 }
