@@ -817,6 +817,104 @@ bot.command('fix_all_files', async (ctx) => {
         client.release();
     }
 });
+// أمر جديد لبدء عملية الترحيل على دفعات
+bot.command('start_migration', async (ctx) => {
+    const client = await getClient();
+    try {
+        const userId = String(ctx.from.id);
+        // هذا الأمر فقط للمشرف الرئيسي
+        if (userId !== process.env.SUPER_ADMIN_ID) {
+            return ctx.reply('🚫 هذا الأمر للمشرف الرئيسي فقط.');
+        }
+
+        const botA_Token = process.env.BOT_A_TOKEN;
+        const botB_Token = process.env.BOT_TOKEN; // التوكن الحالي للبوت
+
+        if (!botA_Token) {
+            return ctx.reply('⚠️ خطأ: لم يتم العثور على توكن البوت القديم. يرجى إضافته كمتغير بيئة باسم `BOT_A_TOKEN` في Vercel.');
+        }
+        
+        const botA = new Telegraf(botA_Token);
+        const botB = new Telegraf(botB_Token);
+
+        const userStateRes = await client.query('SELECT state, state_data FROM public.users WHERE id = $1', [userId]);
+        const stateData = userStateRes.rows[0]?.state_data || {};
+        let allMedia = stateData.migration_files;
+        let currentIndex = stateData.migration_index || 0;
+
+        // إذا كانت هذه هي المرة الأولى لتشغيل الأمر
+        if (!allMedia) {
+            await ctx.reply('🔍 تم العثور على أمر جديد. جارٍ جلب قائمة الملفات من قاعدة البيانات لأول مرة...');
+            const mediaRes = await client.query(`SELECT id, content, type FROM public.messages WHERE type != 'text'`);
+            allMedia = mediaRes.rows;
+            await updateUserState(userId, { stateData: { ...stateData, migration_files: allMedia, migration_index: 0 } });
+            if (allMedia.length === 0) return ctx.reply('✅ لا توجد ملفات لمعالجتها.');
+        }
+
+        const totalFiles = allMedia.length;
+        if (currentIndex >= totalFiles) {
+            await updateUserState(userId, { stateData: { ...stateData, migration_files: null, migration_index: null } });
+            return ctx.reply('🎉🎉🎉 اكتملت عملية إصلاح جميع الملفات بنجاح!');
+        }
+
+        const batchSize = 20; // معالجة 20 ملف في كل مرة
+        const endOfBatch = Math.min(currentIndex + batchSize, totalFiles);
+        
+        await ctx.reply(`⏳ ستبدأ معالجة دفعة جديدة من الملفات (${currentIndex + 1} إلى ${endOfBatch}) من أصل ${totalFiles}. يرجى الانتظار...`);
+        
+        let successCount = 0;
+        let failureCount = 0;
+
+        for (let i = currentIndex; i < endOfBatch; i++) {
+            const message = allMedia[i];
+            try {
+                const fileLink = await botA.telegram.getFileLink(message.content);
+                
+                let sentMessage;
+                switch (message.type) {
+                    case 'photo': sentMessage = await botB.telegram.sendPhoto(userId, { url: fileLink.href }); break;
+                    case 'video': sentMessage = await botB.telegram.sendVideo(userId, { url: fileLink.href }); break;
+                    case 'document': sentMessage = await botB.telegram.sendDocument(userId, { url: fileLink.href }); break;
+                    case 'audio': sentMessage = await botB.telegram.sendAudio(userId, { url: fileLink.href }); break;
+                    case 'voice': sentMessage = await botB.telegram.sendVoice(userId, { url: fileLink.href }); break;
+                    default: continue;
+                }
+
+                let newFileId;
+                if(sentMessage.photo) newFileId = sentMessage.photo.pop().file_id;
+                else if(sentMessage.video) newFileId = sentMessage.video.file_id;
+                else if(sentMessage.document) newFileId = sentMessage.document.file_id;
+                else if(sentMessage.audio) newFileId = sentMessage.audio.file_id;
+                else if(sentMessage.voice) newFileId = sentMessage.voice.file_id;
+                
+                await botB.telegram.deleteMessage(userId, sentMessage.message_id);
+                await client.query('UPDATE public.messages SET content = $1 WHERE id = $2', [newFileId, message.id]);
+                successCount++;
+            } catch (error) {
+                failureCount++;
+                console.error(`Migration failed for DB ID ${message.id}: ${error.message}`);
+            }
+        }
+        
+        // تحديث المؤشر للدفعة التالية
+        await updateUserState(userId, { stateData: { ...stateData, migration_index: endOfBatch } });
+
+        let report = `🏁 اكتملت الدفعة الحالية.\n\n- ✅ نجاح: ${successCount}\n- ❌ فشل: ${failureCount}\n- 📈 التقدم: ${endOfBatch}/${totalFiles}\n\n`;
+        if (endOfBatch < totalFiles) {
+            report += `**👈 أرسل /start_migration مرة أخرى لمعالجة الدفعة التالية.**`;
+        } else {
+            report += `**🎉 اكتملت العملية بنجاح!**`;
+            await updateUserState(userId, { stateData: { ...stateData, migration_files: null, migration_index: null } });
+        }
+        await ctx.reply(report);
+
+    } catch (error) {
+        console.error("Fatal error in /start_migration:", error);
+        await ctx.reply('❌ حدث خطأ فادح. يرجى مراجعة سجلات الأخطاء في Vercel.');
+    } finally {
+        client.release();
+    }
+});
 // أمر عرض معلومات المستخدم (يدعم الآن الرد أو استخدام الـ ID)
 bot.command('info', async (ctx) => {
     const client = await getClient();
