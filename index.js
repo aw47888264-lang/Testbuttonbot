@@ -1245,6 +1245,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const values = [buttonId, newOrder, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities)];
                     await client.query(query, values);
                 }
+              await invalidateMessagesCache(buttonId);
                 
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, `✅ تم إضافة ${collectedMessages.length} رسالة بنجاح.`);
@@ -1403,6 +1404,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
+                  await invalidateMessagesCache(buttonId);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
                 } else { // This block handles AWAITING_NEW_MESSAGE
@@ -1437,6 +1439,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                         await client.query(query, values);
                         
                         await client.query('COMMIT'); // Commit the successful transaction
+                      await invalidateMessagesCache(buttonId);
                     } catch (e) {
                         await client.query('ROLLBACK'); // Rollback the transaction on error
                         console.error("Error adding new message:", e);
@@ -1545,6 +1548,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     summaryMessage += `\n\n⚠️ تم تخطي الأزرار التالية:\n${skippedMessages.join('\n')}`;
                 }
 
+              await invalidateKeyboardCache(parentId);
                 await updateUserState(userId, { state: 'EDITING_BUTTONS' });
                 await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
@@ -1577,6 +1581,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 }
                 await client.query('UPDATE public.buttons SET text = $1 WHERE id = $2', [newButtonName, buttonIdToRename]);
 
+              await invalidateKeyboardCache(parentId);
                 await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                 await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
@@ -1660,6 +1665,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     await deepDeleteButton(buttonId, client);
                     await client.query('COMMIT');
 
+                  await invalidateKeyboardCache(parentId);
                     await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `🗑️ تم الحذف العميق للقسم "${buttonName}" بنجاح.`);
                     
                     await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
@@ -2491,6 +2497,7 @@ bot.on('callback_query', async (ctx) => {
                             await client.query('UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3', [i, newIsFullWidth, button.id]);
                         }
                         await client.query('COMMIT'); // Commit transaction
+                      await invalidateKeyboardCache(parentId);
                         await refreshKeyboardView(ctx, userId, '✅ تم تحديث ترتيب الأزرار.');
                         await ctx.answerCbQuery();
                     } else {
@@ -2523,6 +2530,7 @@ bot.on('callback_query', async (ctx) => {
                 await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+              await invalidateMessagesCache(buttonId);
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
             }
@@ -2571,6 +2579,7 @@ try {
     await transactionClient.query('COMMIT'); // 5. If all steps succeed, commit the changes
 
     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+  await invalidateMessagesCache(buttonId);
     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب بنجاح.');
 
 } catch (e) {
