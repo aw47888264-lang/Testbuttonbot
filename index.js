@@ -806,21 +806,43 @@ const mainMessageHandler = async (ctx) => {
                 }
 
                 // --- 2. تجميع الرسائل الواردة ---
-                let newMessageObject;
-                if (ctx.message.poll) {
-                    try {
-                        const botOwnedPoll = await ctx.copyMessage(ctx.chat.id);
-                        newMessageObject = {
-                            type: "poll", // نوع مخصص للتمييز
-                            content: String(botOwnedPoll.message_id), // تخزين message_id في content
-                            caption: String(botOwnedPoll.chat.id),    // تخزين chat_id في caption
-                            entities: [] // قيمة افتراضية فارغة
-                        };
-                    } catch(e) {
-                        console.error("Failed to handle and copy poll:", e);
-                        return ctx.reply('حدث خطأ أثناء معالجة الاستطلاع. يرجى المحاولة مرة أخرى.');
-                    }
-                }
+               // --- 2. تجميع الرسائل الواردة ---
+let newMessageObject;
+if (ctx.message.poll) {
+    try {
+        const originalPoll = ctx.message.poll;
+
+        // نجعل البوت ينشئ استطلاعًا جديدًا بناءً على بيانات الاستطلاع الأصلي
+        const botOwnedPoll = await ctx.replyWithPoll(
+            originalPoll.question,
+            originalPoll.options.map(option => option.text),
+            {
+                is_anonymous: originalPoll.is_anonymous,
+                type: originalPoll.type,
+                allows_multiple_answers: originalPoll.allows_multiple_answers,
+                correct_option_id: originalPoll.correct_option_id,
+                explanation: originalPoll.explanation,
+                explanation_entities: originalPoll.explanation_entities,
+                open_period: originalPoll.open_period,
+                close_date: originalPoll.close_date,
+                is_closed: originalPoll.is_closed
+            }
+        );
+        
+        // الآن نخزن بيانات الاستطلاع الجديد الذي أنشأه البوت
+        newMessageObject = {
+            type: "poll",
+            content: String(botOwnedPoll.message_id), // ID رسالة الاستطلاع الجديد
+            caption: String(botOwnedPoll.chat.id),    // ID المحادثة (نفس المحادثة الحالية)
+            entities: []
+        };
+
+    } catch (e) {
+        console.error("Failed to create and handle poll:", e);
+        return ctx.reply('حدث خطأ فادح أثناء إنشاء الاستطلاع. يرجى التحقق من صلاحيات البوت.');
+    }
+}
+// ... باقي الكود
                 else if (ctx.message.text) {
                     newMessageObject = { type: "text", content: ctx.message.text, entities: ctx.message.entities || [] };
                 } else if (ctx.message.photo) {
