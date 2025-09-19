@@ -1,14 +1,22 @@
 // =================================================================
-// |   TELEGRAM SUPABASE BOT - V56 - FINAL VERSION                 |
+// |   TELEGRAM SUPABASE BOT - FINAL VERSION                       |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const { Pool } = require('pg');
-const Redis = require('ioredis');
+const { Redis } = require('@upstash/redis');
 
-// --- 2. تهيئة Pooler الاتصال بـ Supabase ---
-const redis = new Redis(process.env.UPSTASH_REDIS_URL);
+
+// --- 2. تهيئة الاتصالات ---
+
+// الاتصال بـ Upstash Redis (الطريقة الجديدة والموصى بها)
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+
+// الاتصال بقاعدة بيانات Supabase (PostgreSQL)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -22,6 +30,9 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // =================================================================
 // |                         Helper Functions (دوال مساعدة)                      |
 // =================================================================
+
+// ... (هنا تبدأ باقي الدوال المساعدة مثل getClient وغيرها) ...
+
 // دالة مساعدة لجلب المسار الكامل لزر معين
 async function getButtonPath(buttonId, client) {
     let pathParts = [];
