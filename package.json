@@ -1,16 +1,14 @@
 {
-  "name": "telegram-supabase-bot",
+  "name": "your-telegram-bot",
   "version": "1.0.0",
-  "description": "Telegram bot with Supabase and Upstash Redis",
+  "description": "A Telegram bot with background job processing.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "Ahmed walid",
-  "license": "ISC",
   "dependencies": {
-    "@upstash/redis": "^1.31.5",
-    "pg": "^8.11.5",
+    "axios": "^1.7.2",
+    "pg": "^8.12.0",
     "telegraf": "^4.16.3"
   }
 }
