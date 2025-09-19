@@ -1,22 +1,12 @@
 // =================================================================
-// |   TELEGRAM SUPABASE BOT - FINAL VERSION                       |
+// |   TELEGRAM SUPABASE BOT - V56 - FINAL VERSION                 |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const { Pool } = require('pg');
-const { Redis } = require('@upstash/redis');
 
-
-// --- 2. تهيئة الاتصالات ---
-
-// الاتصال بـ Upstash Redis (الطريقة الجديدة والموصى بها)
-const redis = new Redis({
-  url: process.env.KV_REST_API_URL,
-  token: process.env.KV_REST_API_TOKENCorrect,
-});
-
-// الاتصال بقاعدة بيانات Supabase (PostgreSQL)
+// --- 2. تهيئة Pooler الاتصال بـ Supabase ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -31,26 +21,6 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // |                         Helper Functions (دوال مساعدة)                      |
 // =================================================================
 
-// ... (هنا تبدأ باقي الدوال المساعدة مثل getClient وغيرها) ...
-
-// دالة مساعدة لجلب المسار الكامل لزر معين
-async function getButtonPath(buttonId, client) {
-    let pathParts = [];
-    let currentButtonId = buttonId;
-
-    while (currentButtonId) {
-        const result = await client.query('SELECT text, parent_id FROM public.buttons WHERE id = $1', [currentButtonId]);
-        if (result.rows.length > 0) {
-            pathParts.unshift(result.rows[0].text); // unshift يضيف العنصر في بداية المصفوفة
-            currentButtonId = result.rows[0].parent_id;
-        } else {
-            break; // توقف إذا لم يتم العثور على الزر (لمنع حلقة لا نهائية)
-        }
-    }
-
-    pathParts.unshift('القائمة الرئيسية');
-    return pathParts.join(' > ');
-}
 // دالة لجلب اتصال من الـ Pooler
 async function getClient() {
     try {
@@ -126,27 +96,6 @@ function getSourceId(ctx) {
         return String(ctx.message.forward_from_chat.id);
     }
     return null;
-}
-// 💡 دالة لحذف الكاش الخاص بلوحة المفاتيح بشكل آمن
-async function invalidateKeyboardCache(parentId) {
-    try {
-        // نحذف الكاش للمشرفين وغير المشرفين لأن قائمة الأزرار قد تختلف
-        await redis.del(`buttons:${parentId}:true`);
-        await redis.del(`buttons:${parentId}:false`);
-        console.log(`[Cache] Invalidated KEYBOARD for parent: ${parentId}`);
-    } catch (redisError) {
-        console.error(`[Cache Invalidate Error] Failed to invalidate keyboard for parent ${parentId}:`, redisError.message);
-    }
-}
-
-// 💡 دالة لحذف الكاش الخاص بالرسائل بشكل آمن
-async function invalidateMessagesCache(buttonId) {
-    try {
-        await redis.del(`messages:${buttonId}`);
-        console.log(`[Cache] Invalidated MESSAGES for button: ${buttonId}`);
-    } catch (redisError) {
-        console.error(`[Cache Invalidate Error] Failed to invalidate messages for button ${buttonId}:`, redisError.message);
-    }
 }
 // دالة مساعدة لحذف زر وكل محتوياته وأزراره الفرعية بشكل متكرر
 async function deepDeleteButton(buttonId, client) {
@@ -386,9 +335,10 @@ async function generateKeyboard(userId) {
     }
     
     // --- لوحة مفاتيح قسم الإشراف ---
+    // --- لوحة مفاتيح قسم الإشراف ---
     if (currentPath === 'supervision') {
         keyboardRows = [
-            ['📊 الإحصائيات'],
+            ['📊 الإحصائيات'], // تم حذف زر الرسالة الجماعية
             ['🔔 رسالة التنبيه', '📝 تعديل رسالة الترحيب'],
             ['⚙️ تعديل المشرفين', '🚫 قائمة المحظورين'],
             ['🔙 رجوع', '🔝 القائمة الرئيسية']
@@ -398,41 +348,17 @@ async function generateKeyboard(userId) {
 
     // --- بناء لوحة المفاتيح الرئيسية ---
     let buttonsToRender;
-    const parentId = currentPath === 'root' ? null : currentPath.split('/').pop();
-    
-    // 💡 1. محاولة قراءة قائمة الأزرار من الكاش بأمان
-    const cacheKey = `buttons:${parentId}:${isAdmin}`;
-    let cachedButtons = null;
-    try {
-        cachedButtons = await redis.get(cacheKey);
-    } catch (redisError) {
-        console.error(`[Cache Read Error] Failed to get key ${cacheKey}:`, redisError.message);
-    }
-
-    if (cachedButtons) {
-      console.log(`[Cache Hit] KEYBOARD for parent: ${parentId} | isAdmin: ${isAdmin}`);
-        buttonsToRender = cachedButtons;
+    let query, values;
+    if (currentPath === 'root') {
+        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"';
+        values = [];
     } else {
-      console.log(`[Cache Miss] KEYBOARD for parent: ${parentId} | isAdmin: ${isAdmin}`);
-        // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
-        let query, values;
-        if (currentPath === 'root') {
-            query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"';
-            values = [];
-        } else {
-            query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"';
-            values = [parentId];
-        }
-        const buttonsResult = await client.query(query, values);
-        buttonsToRender = buttonsResult.rows;
-
-        // 💡 2. محاولة التخزين في الكاش بأمان
-        try {
-            await redis.set(cacheKey, JSON.stringify(buttonsToRender), { ex: 3600 }); // صلاحية ساعة
-        } catch (redisError) {
-            console.error(`[Cache Write Error] Failed to set key ${cacheKey}:`, redisError.message);
-        }
+        const parentId = currentPath.split('/').pop();
+        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"';
+        values = [parentId];
     }
+    const buttonsResult = await client.query(query, values);
+    buttonsToRender = buttonsResult.rows;
     
     let currentRow = [];
     buttonsToRender.forEach(button => {
@@ -464,10 +390,10 @@ async function generateKeyboard(userId) {
     // --- إضافة أزرار الإدارة ---
     if (isAdmin) {
         if (isAdmin && state === 'EDITING_BUTTONS') { 
-            keyboardRows.push(['➕ إضافة زر']);
-            keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
-            keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
-        }
+    keyboardRows.push(['➕ إضافة زر']);
+    keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
+    keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
+}
         const otherAdminActions = [];
         if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
             otherAdminActions.push('➕ إضافة رسالة');
@@ -505,41 +431,11 @@ async function generateKeyboard(userId) {
 
 // دالة لإرسال رسائل الزر (نسخة معدّلة)
 // دالة لإرسال رسائل الزر (نسخة نهائية بمعالج تنسيق مدمج)
- // دالة لإرسال رسائل الزر (نسخة معدّلة وآمنة مع الكاش)
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const client = await getClient();
     try {
-        let messages;
-        const cacheKey = `messages:${buttonId}`;
-        let cachedMessages = null;
-
-        // 💡 1. محاولة القراءة من الكاش بأمان
-        try {
-            cachedMessages = await redis.get(cacheKey);
-        } catch (redisError) {
-            console.error(`[Cache Read Error] Failed to get key ${cacheKey}:`, redisError.message);
-        }
-
-        if (cachedMessages) {
-          console.log(`[Cache Hit] MESSAGES for button: ${buttonId}`);
-            messages = cachedMessages;
-        } else {
-          console.log(`[Cache Miss] MESSAGES for button: ${buttonId}`);
-            // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
-            const messagesResult = await client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
-            messages = messagesResult.rows;
-
-            // 💡 2. محاولة التخزين في الكاش بأمان للمرة القادمة
-            if (messages.length > 0) {
-                 try {
-                   await redis.set(cacheKey, JSON.stringify(messages), { ex: 3600 }); // صلاحية ساعة
-                 } catch (redisError) {
-                    console.error(`[Cache Write Error] Failed to set key ${cacheKey}:`, redisError.message);
-                 }
-            }
-        }
-        
-        // ... باقي كود الدالة المسؤول عن إرسال الرسائل يبقى كما هو تمامًا ...
+        const messagesResult = await client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
+        const messages = messagesResult.rows;
 
         if (messages.length === 0 && inEditMode) {
             if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
@@ -568,7 +464,11 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
             };
             let textToSend = message.content;
 
+            // ==========================================================
+            // |      =============== المنطق النهائي للتنسيق ===============      |
+            // ==========================================================
             if (message.entities && message.entities.length > 0) {
+                // إذا كانت entities موجودة (رسالة موجهة)، فهي الأولوية القصوى
                 if (message.type === 'text') {
                     options.entities = message.entities;
                 } else {
@@ -576,6 +476,7 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
                     options.caption_entities = message.entities;
                 }
             } else {
+                // إذا لم تكن entities موجودة (نص يدوي)، قم بتحويل Markdown إلى HTML وأرسل دائمًا كـ HTML
                 options.parse_mode = 'HTML';
                 if (message.type === 'text') {
                     textToSend = convertMarkdownToHtml(message.content);
@@ -742,204 +643,6 @@ const banUnbanHandler = async (ctx, banAction) => {
 bot.command('ban', (ctx) => banUnbanHandler(ctx, true));
 bot.command('unban', (ctx) => banUnbanHandler(ctx, false));
 
-bot.command('fix_all_files', async (ctx) => {
-    const client = await getClient();
-    try {
-        const userId = String(ctx.from.id);
-        const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [userId]);
-        if (!userResult.rows[0]?.is_admin) return;
-
-        // 1. إنشاء مصفوفة لتخزين المسارات الفاشلة مباشرة
-        const failedFilePaths = [];
-        const statusMessage = await ctx.reply('⏳ ستبدأ الآن عملية الإصلاح والتنشيط. سيتم تجميع الأخطاء لعرضها في النهاية...');
-
-        const mediaMessagesResult = await client.query(
-            `SELECT id, content, type, caption, entities, button_id FROM public.messages WHERE type != 'text'`
-        );
-        const allMedia = mediaMessagesResult.rows;
-
-        if (allMedia.length === 0) {
-            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا توجد أي ملفات لإصلاحها.');
-        }
-
-        let successCount = 0;
-        let failureCount = 0;
-
-        for (let i = 0; i < allMedia.length; i++) {
-            const message = allMedia[i];
-            const options = { caption: message.caption, caption_entities: message.entities };
-            
-            try {
-                let sentMessage;
-                switch (message.type) {
-                    case 'photo': sentMessage = await bot.telegram.sendPhoto(userId, message.content, options); break;
-                    case 'video': sentMessage = await bot.telegram.sendVideo(userId, message.content, options); break;
-                    case 'document': sentMessage = await bot.telegram.sendDocument(userId, message.content, options); break;
-                    case 'audio': sentMessage = await bot.telegram.sendAudio(userId, message.content, options); break;
-                    case 'voice': sentMessage = await bot.telegram.sendVoice(userId, message.content, options); break;
-                }
-                
-                if (sentMessage) {
-                    await bot.telegram.deleteMessage(userId, sentMessage.message_id);
-                }
-                successCount++;
-            } catch (e) {
-                failureCount++;
-                // 2. تسجيل المسار الفاشل في المصفوفة مباشرة
-                const path = await getButtonPath(message.button_id, client);
-                failedFilePaths.push(path);
-            }
-
-            if ((i + 1) % 25 === 0 || (i + 1) === allMedia.length) {
-                await ctx.telegram.editMessageText(
-                    ctx.chat.id, statusMessage.message_id, undefined,
-                    `⏳ جاري المعالجة... (${i + 1}/${allMedia.length})\n✅ تم التنشيط: ${successCount}\n❌ فشل: ${failureCount}`
-                );
-            }
-        }
-
-        await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-
-        let finalReport = `🎉 **اكتملت عملية الإصلاح الشاملة** 🎉\n\n` +
-                          `✅ **النتيجة:** تم تنشيط **${successCount}** ملف بنجاح وهي تعمل الآن.\n` +
-                          `❌ **مطلوب تدخل:** فشل **${failureCount}** ملف في التنشيط التلقائي.\n\n`;
-
-        if (failureCount > 0) {
-            finalReport += `📋 **قائمة الإصلاح اليدوي (اذهب لهذه المسارات وأصلحها):**\n`;
-            
-            // 3. استخدام المصفوفة مباشرة لإنشاء التقرير
-            const uniquePaths = [...new Set(failedFilePaths)];
-            uniquePaths.forEach((path, index) => {
-                finalReport += `${index + 1}. \`${path}\`\n`;
-            });
-             finalReport += `\nعندما تذهب للمسار، سيظهر لك زر "🔧 استبدال الملف" تلقائيًا.`;
-        } else {
-            finalReport += `\n**كل الملفات في البوت تعمل الآن بشكل سليم!**`;
-        }
-
-        for (let i = 0; i < finalReport.length; i += 4096) {
-            await ctx.reply(finalReport.substring(i, i + 4096), { parse_mode: 'Markdown' });
-        }
-
-    } catch (error) {
-        console.error("Fatal error in /fix_all_files command:", error);
-        await ctx.reply('حدث خطأ فادح أثناء العملية.');
-    } finally {
-        client.release();
-    }
-});
-// أمر جديد لبدء عملية الترحيل على دفعات
-const path = require('path'); // تأكد من وجود هذا السطر في بداية الملف
-
-// أمر جديد لبدء عملية الترحيل على دفعات مع الحفاظ على الأسماء والامتدادات
-bot.command('start_migration', async (ctx) => {
-    const client = await getClient();
-    try {
-        const userId = String(ctx.from.id);
-        // هذا الأمر فقط للمشرف الرئيسي
-        if (userId !== process.env.SUPER_ADMIN_ID) {
-            return ctx.reply('🚫 هذا الأمر للمشرف الرئيسي فقط.');
-        }
-
-        const botA_Token = process.env.BOT_A_TOKEN;
-        const botB_Token = process.env.BOT_TOKEN;
-
-        if (!botA_Token) {
-            return ctx.reply('⚠️ خطأ: لم يتم العثور على توكن البوت القديم. يرجى إضافته كمتغير بيئة باسم `BOT_A_TOKEN` في Vercel.');
-        }
-        
-        const botA = new Telegraf(botA_Token);
-        const botB = new Telegraf(botB_Token);
-
-        const userStateRes = await client.query('SELECT state, state_data FROM public.users WHERE id = $1', [userId]);
-        const stateData = userStateRes.rows[0]?.state_data || {};
-        let allMedia = stateData.migration_files;
-        let currentIndex = stateData.migration_index || 0;
-
-        if (!allMedia) {
-            await ctx.reply('🔍 تم العثور على أمر جديد. جارٍ جلب قائمة الملفات من قاعدة البيانات لأول مرة...');
-            const mediaRes = await client.query(`SELECT id, content, type, caption FROM public.messages WHERE type != 'text'`);
-            allMedia = mediaRes.rows;
-            await updateUserState(userId, { stateData: { ...stateData, migration_files: allMedia, migration_index: 0 } });
-            if (allMedia.length === 0) return ctx.reply('✅ لا توجد ملفات لمعالجتها.');
-        }
-
-        const totalFiles = allMedia.length;
-        if (currentIndex >= totalFiles) {
-            await updateUserState(userId, { stateData: { ...stateData, migration_files: null, migration_index: null } });
-            return ctx.reply('🎉🎉🎉 اكتملت عملية إصلاح جميع الملفات بنجاح!');
-        }
-
-        const batchSize = 20;
-        const endOfBatch = Math.min(currentIndex + batchSize, totalFiles);
-        
-        await ctx.reply(`⏳ ستبدأ معالجة دفعة جديدة من الملفات (${currentIndex + 1} إلى ${endOfBatch}) من أصل ${totalFiles}. يرجى الانتظار...`);
-        
-        let successCount = 0;
-        let failureCount = 0;
-
-        for (let i = currentIndex; i < endOfBatch; i++) {
-            const message = allMedia[i];
-            try {
-                // 1. جلب تفاصيل الملف من البوت (أ) للحصول على الامتداد الأصلي
-                const fileDetails = await botA.telegram.getFile(message.content);
-                const originalExtension = path.extname(fileDetails.file_path || '');
-                
-                // 2. جلب رابط التحميل المؤقت
-                const fileLink = await botA.telegram.getFileLink(message.content);
-                
-                // 3. إنشاء اسم ملف معبر من الشرح
-                const baseFilename = (message.caption || `file_${message.id}`).substring(0, 50).replace(/[^\w\s\u0600-\u06FF.-]/g, '_');
-                const finalFilename = baseFilename + originalExtension;
-
-                // 4. رفع الملف بالاسم والامتداد الصحيحين
-                let sentMessage;
-                const extra_options = { caption: message.caption };
-
-                switch (message.type) {
-                    case 'photo': sentMessage = await botB.telegram.sendPhoto(userId, { url: fileLink.href }, extra_options); break;
-                    case 'video': sentMessage = await botB.telegram.sendVideo(userId, { url: fileLink.href }, { ...extra_options, file_name: finalFilename }); break;
-                    case 'document': sentMessage = await botB.telegram.sendDocument(userId, { url: fileLink.href, filename: finalFilename }, extra_options); break;
-                    case 'audio': sentMessage = await botB.telegram.sendAudio(userId, { url: fileLink.href, filename: finalFilename }, extra_options); break;
-                    case 'voice': sentMessage = await botB.telegram.sendVoice(userId, { url: fileLink.href }); break;
-                    default: continue;
-                }
-
-                // 5. استخراج الـ ID الجديد وتحديث قاعدة البيانات
-                let newFileId;
-                if(sentMessage.photo) newFileId = sentMessage.photo.pop().file_id;
-                else if(sentMessage.video) newFileId = sentMessage.video.file_id;
-                else if(sentMessage.document) newFileId = sentMessage.document.file_id;
-                else if(sentMessage.audio) newFileId = sentMessage.audio.file_id;
-                else if(sentMessage.voice) newFileId = sentMessage.voice.file_id;
-                
-                await botB.telegram.deleteMessage(userId, sentMessage.message_id);
-                await client.query('UPDATE public.messages SET content = $1 WHERE id = $2', [newFileId, message.id]);
-                successCount++;
-            } catch (error) {
-                failureCount++;
-                console.error(`Migration failed for DB ID ${message.id}: ${error.message}`);
-            }
-        }
-        
-        await updateUserState(userId, { stateData: { ...stateData, migration_index: endOfBatch } });
-
-        let report = `🏁 اكتملت الدفعة الحالية.\n\n- ✅ نجاح: ${successCount}\n- ❌ فشل: ${failureCount}\n- 📈 التقدم: ${endOfBatch}/${totalFiles}\n\n`;
-        if (endOfBatch < totalFiles) {
-            report += `**👈 أرسل /start_migration مرة أخرى لمعالجة الدفعة التالية.**`;
-        } else {
-            report += `**🎉 اكتملت العملية بنجاح!**`;
-            await updateUserState(userId, { stateData: { ...stateData, migration_files: null, migration_index: null } });
-        }
-        await ctx.reply(report);
-
-    } catch (error) {
-        console.error("Fatal error in /start_migration:", error);
-        await ctx.reply('❌ حدث خطأ فادح. يرجى مراجعة سجلات الأخطاء في Vercel.');
-    } finally {
-        client.release();
-    }
-});
 // أمر عرض معلومات المستخدم (يدعم الآن الرد أو استخدام الـ ID)
 bot.command('info', async (ctx) => {
     const client = await getClient();
@@ -1475,7 +1178,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const values = [buttonId, newOrder, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities)];
                     await client.query(query, values);
                 }
-              await invalidateMessagesCache(buttonId);
                 
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, `✅ تم إضافة ${collectedMessages.length} رسالة بنجاح.`);
@@ -1634,7 +1336,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
-                  await invalidateMessagesCache(buttonId);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
                 } else { // This block handles AWAITING_NEW_MESSAGE
@@ -1669,7 +1370,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                         await client.query(query, values);
                         
                         await client.query('COMMIT'); // Commit the successful transaction
-                      await invalidateMessagesCache(buttonId);
                     } catch (e) {
                         await client.query('ROLLBACK'); // Rollback the transaction on error
                         console.error("Error adding new message:", e);
@@ -1778,7 +1478,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     summaryMessage += `\n\n⚠️ تم تخطي الأزرار التالية:\n${skippedMessages.join('\n')}`;
                 }
 
-              await invalidateKeyboardCache(parentId);
                 await updateUserState(userId, { state: 'EDITING_BUTTONS' });
                 await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
@@ -1811,7 +1510,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 }
                 await client.query('UPDATE public.buttons SET text = $1 WHERE id = $2', [newButtonName, buttonIdToRename]);
 
-              await invalidateKeyboardCache(parentId);
                 await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                 await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
@@ -1895,7 +1593,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     await deepDeleteButton(buttonId, client);
                     await client.query('COMMIT');
 
-                  await invalidateKeyboardCache(parentId);
                     await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `🗑️ تم الحذف العميق للقسم "${buttonName}" بنجاح.`);
                     
                     await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
@@ -2727,7 +2424,6 @@ bot.on('callback_query', async (ctx) => {
                             await client.query('UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3', [i, newIsFullWidth, button.id]);
                         }
                         await client.query('COMMIT'); // Commit transaction
-                      await invalidateKeyboardCache(parentId);
                         await refreshKeyboardView(ctx, userId, '✅ تم تحديث ترتيب الأزرار.');
                         await ctx.answerCbQuery();
                     } else {
@@ -2760,7 +2456,6 @@ bot.on('callback_query', async (ctx) => {
                 await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
-              await invalidateMessagesCache(buttonId);
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
             }
@@ -2809,7 +2504,6 @@ try {
     await transactionClient.query('COMMIT'); // 5. If all steps succeed, commit the changes
 
     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
-  await invalidateMessagesCache(buttonId);
     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب بنجاح.');
 
 } catch (e) {
