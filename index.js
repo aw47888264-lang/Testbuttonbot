@@ -99,6 +99,27 @@ function getSourceId(ctx) {
     }
     return null;
 }
+// 💡 دالة لحذف الكاش الخاص بلوحة المفاتيح بشكل آمن
+async function invalidateKeyboardCache(parentId) {
+    try {
+        // نحذف الكاش للمشرفين وغير المشرفين لأن قائمة الأزرار قد تختلف
+        await redis.del(`buttons:${parentId}:true`);
+        await redis.del(`buttons:${parentId}:false`);
+        console.log(`[Cache] Invalidated KEYBOARD for parent: ${parentId}`);
+    } catch (redisError) {
+        console.error(`[Cache Invalidate Error] Failed to invalidate keyboard for parent ${parentId}:`, redisError.message);
+    }
+}
+
+// 💡 دالة لحذف الكاش الخاص بالرسائل بشكل آمن
+async function invalidateMessagesCache(buttonId) {
+    try {
+        await redis.del(`messages:${buttonId}`);
+        console.log(`[Cache] Invalidated MESSAGES for button: ${buttonId}`);
+    } catch (redisError) {
+        console.error(`[Cache Invalidate Error] Failed to invalidate messages for button ${buttonId}:`, redisError.message);
+    }
+}
 // دالة مساعدة لحذف زر وكل محتوياته وأزراره الفرعية بشكل متكرر
 async function deepDeleteButton(buttonId, client) {
     // 1. البحث عن كل الأزرار الفرعية للزر الحالي
