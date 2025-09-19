@@ -731,22 +731,24 @@ const banUnbanHandler = async (ctx, banAction) => {
 bot.command('ban', (ctx) => banUnbanHandler(ctx, true));
 bot.command('unban', (ctx) => banUnbanHandler(ctx, false));
 
-bot.command('activate_files', async (ctx) => {
+bot.command('fix_all_files', async (ctx) => {
     const client = await getClient();
     try {
         const userId = String(ctx.from.id);
         const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [userId]);
         if (!userResult.rows[0]?.is_admin) return;
 
-        const statusMessage = await ctx.reply('⏳ ستبدأ الآن عملية تنشيط الملفات القديمة... يرجى الانتظار.');
+        // 1. إنشاء مصفوفة لتخزين المسارات الفاشلة مباشرة
+        const failedFilePaths = [];
+        const statusMessage = await ctx.reply('⏳ ستبدأ الآن عملية الإصلاح والتنشيط. سيتم تجميع الأخطاء لعرضها في النهاية...');
 
         const mediaMessagesResult = await client.query(
-            `SELECT id, content, type, caption, entities FROM public.messages WHERE type != 'text'`
+            `SELECT id, content, type, caption, entities, button_id FROM public.messages WHERE type != 'text'`
         );
         const allMedia = mediaMessagesResult.rows;
 
         if (allMedia.length === 0) {
-            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا توجد أي ملفات لتنشيطها.');
+            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا توجد أي ملفات لإصلاحها.');
         }
 
         let successCount = 0;
@@ -757,7 +759,6 @@ bot.command('activate_files', async (ctx) => {
             const options = { caption: message.caption, caption_entities: message.entities };
             
             try {
-                // السر هنا: البوت يرسل الملف لنفسه باستخدام الـ ID القديم لتنشيطه
                 let sentMessage;
                 switch (message.type) {
                     case 'photo': sentMessage = await bot.telegram.sendPhoto(userId, message.content, options); break;
@@ -767,34 +768,51 @@ bot.command('activate_files', async (ctx) => {
                     case 'voice': sentMessage = await bot.telegram.sendVoice(userId, message.content, options); break;
                 }
                 
-                // بعد الإرسال الناجح، نحذف الرسالة مباشرة لتنظيف المحادثة
                 if (sentMessage) {
                     await bot.telegram.deleteMessage(userId, sentMessage.message_id);
                 }
                 successCount++;
-
             } catch (e) {
                 failureCount++;
-                console.error(`Failed to activate file with DB ID ${message.id}:`, e.message);
+                // 2. تسجيل المسار الفاشل في المصفوفة مباشرة
+                const path = await getButtonPath(message.button_id, client);
+                failedFilePaths.push(path);
             }
 
             if ((i + 1) % 25 === 0 || (i + 1) === allMedia.length) {
                 await ctx.telegram.editMessageText(
                     ctx.chat.id, statusMessage.message_id, undefined,
-                    `⏳ جاري المعالجة... (${i + 1}/${allMedia.length})\n✅ النجاح: ${successCount}\n❌ الفشل: ${failureCount}`
+                    `⏳ جاري المعالجة... (${i + 1}/${allMedia.length})\n✅ تم التنشيط: ${successCount}\n❌ فشل: ${failureCount}`
                 );
             }
         }
 
-        let finalReport = `🎉 **اكتملت عملية التنشيط** 🎉\n\n` +
-                          `✅ **النجاح:** تم تنشيط ${successCount} ملف بنجاح.\n` +
-                          `❌ **الفشل:** فشل تنشيط ${failureCount} ملف (تحتاج لإصلاح يدوي).`;
-        
-        await ctx.reply(finalReport, { parse_mode: 'Markdown' });
+        await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+
+        let finalReport = `🎉 **اكتملت عملية الإصلاح الشاملة** 🎉\n\n` +
+                          `✅ **النتيجة:** تم تنشيط **${successCount}** ملف بنجاح وهي تعمل الآن.\n` +
+                          `❌ **مطلوب تدخل:** فشل **${failureCount}** ملف في التنشيط التلقائي.\n\n`;
+
+        if (failureCount > 0) {
+            finalReport += `📋 **قائمة الإصلاح اليدوي (اذهب لهذه المسارات وأصلحها):**\n`;
+            
+            // 3. استخدام المصفوفة مباشرة لإنشاء التقرير
+            const uniquePaths = [...new Set(failedFilePaths)];
+            uniquePaths.forEach((path, index) => {
+                finalReport += `${index + 1}. \`${path}\`\n`;
+            });
+             finalReport += `\nعندما تذهب للمسار، سيظهر لك زر "🔧 استبدال الملف" تلقائيًا.`;
+        } else {
+            finalReport += `\n**كل الملفات في البوت تعمل الآن بشكل سليم!**`;
+        }
+
+        for (let i = 0; i < finalReport.length; i += 4096) {
+            await ctx.reply(finalReport.substring(i, i + 4096), { parse_mode: 'Markdown' });
+        }
 
     } catch (error) {
-        console.error("Fatal error in /activate_files command:", error);
-        await ctx.reply('حدث خطأ فادح أثناء العملية. يرجى مراجعة سجلات الأخطاء.');
+        console.error("Fatal error in /fix_all_files command:", error);
+        await ctx.reply('حدث خطأ فادح أثناء العملية.');
     } finally {
         client.release();
     }
