@@ -730,68 +730,71 @@ const banUnbanHandler = async (ctx, banAction) => {
 
 bot.command('ban', (ctx) => banUnbanHandler(ctx, true));
 bot.command('unban', (ctx) => banUnbanHandler(ctx, false));
-bot.command('scan_errors', async (ctx) => {
+
+bot.command('activate_files', async (ctx) => {
     const client = await getClient();
     try {
         const userId = String(ctx.from.id);
         const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [userId]);
-        if (!userResult.rows[0]?.is_admin) return; // للمشرفين فقط
+        if (!userResult.rows[0]?.is_admin) return;
 
-        const statusMessage = await ctx.reply('🔍 جاري فحص جميع الملفات في قاعدة البيانات... هذه العملية قد تستغرق بعض الوقت.');
+        const statusMessage = await ctx.reply('⏳ ستبدأ الآن عملية تنشيط الملفات القديمة... يرجى الانتظار.');
 
         const mediaMessagesResult = await client.query(
-            `SELECT id, content, type, button_id FROM public.messages WHERE type != 'text'`
+            `SELECT id, content, type, caption, entities FROM public.messages WHERE type != 'text'`
         );
-        const allMediaMessages = mediaMessagesResult.rows;
+        const allMedia = mediaMessagesResult.rows;
 
-        if (allMediaMessages.length === 0) {
-            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا توجد أي ملفات في قاعدة البيانات لفحصها.');
+        if (allMedia.length === 0) {
+            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا توجد أي ملفات لتنشيطها.');
         }
 
-        let brokenFilePaths = [];
-        let checkedCount = 0;
+        let successCount = 0;
+        let failureCount = 0;
 
-        for (const message of allMediaMessages) {
+        for (let i = 0; i < allMedia.length; i++) {
+            const message = allMedia[i];
+            const options = { caption: message.caption, caption_entities: message.entities };
+            
             try {
-                // نستخدم طريقة خفيفة للتحقق من الملف دون إرساله
-                await bot.telegram.getFile(message.content);
-            } catch (e) {
-                // إذا فشلت، فهذا يعني أن الملف خاطئ
-                if (e.message.includes('file is invalid') || e.message.includes('wrong file identifier')) {
-                    const path = await getButtonPath(message.button_id, client);
-                    brokenFilePaths.push(path);
+                // السر هنا: البوت يرسل الملف لنفسه باستخدام الـ ID القديم لتنشيطه
+                let sentMessage;
+                switch (message.type) {
+                    case 'photo': sentMessage = await bot.telegram.sendPhoto(userId, message.content, options); break;
+                    case 'video': sentMessage = await bot.telegram.sendVideo(userId, message.content, options); break;
+                    case 'document': sentMessage = await bot.telegram.sendDocument(userId, message.content, options); break;
+                    case 'audio': sentMessage = await bot.telegram.sendAudio(userId, message.content, options); break;
+                    case 'voice': sentMessage = await bot.telegram.sendVoice(userId, message.content, options); break;
                 }
+                
+                // بعد الإرسال الناجح، نحذف الرسالة مباشرة لتنظيف المحادثة
+                if (sentMessage) {
+                    await bot.telegram.deleteMessage(userId, sentMessage.message_id);
+                }
+                successCount++;
+
+            } catch (e) {
+                failureCount++;
+                console.error(`Failed to activate file with DB ID ${message.id}:`, e.message);
             }
-            checkedCount++;
-            // تحديث الرسالة كل 50 ملف لتشعر المستخدم بالتقدم
-            if (checkedCount % 50 === 0) {
-                await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `🔍 جاري الفحص... (${checkedCount}/${allMediaMessages.length})`);
+
+            if ((i + 1) % 25 === 0 || (i + 1) === allMedia.length) {
+                await ctx.telegram.editMessageText(
+                    ctx.chat.id, statusMessage.message_id, undefined,
+                    `⏳ جاري المعالجة... (${i + 1}/${allMedia.length})\n✅ النجاح: ${successCount}\n❌ الفشل: ${failureCount}`
+                );
             }
         }
 
-        if (brokenFilePaths.length === 0) {
-            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ اكتمل الفحص! تم فحص ${allMediaMessages.length} ملف ولم يتم العثور على أي مشاكل.`);
-        }
-
-        // إزالة المسارات المكررة
-        const uniquePaths = [...new Set(brokenFilePaths)];
-
-        let reportMessage = `🚫 **تقرير الأخطاء** 🚫\n\nتم العثور على مشاكل في المسارات التالية:\n\n`;
-        uniquePaths.forEach((path, index) => {
-            reportMessage += `${index + 1}. \`${path}\`\n`;
-        });
+        let finalReport = `🎉 **اكتملت عملية التنشيط** 🎉\n\n` +
+                          `✅ **النجاح:** تم تنشيط ${successCount} ملف بنجاح.\n` +
+                          `❌ **الفشل:** فشل تنشيط ${failureCount} ملف (تحتاج لإصلاح يدوي).`;
         
-        // إرسال التقرير النهائي
-        await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-        
-        // تقسيم الرسالة إذا كانت طويلة جدًا
-        for (let i = 0; i < reportMessage.length; i += 4096) {
-            await ctx.reply(reportMessage.substring(i, i + 4096));
-        }
+        await ctx.reply(finalReport, { parse_mode: 'Markdown' });
 
     } catch (error) {
-        console.error("Error in /scan_errors command:", error);
-        await ctx.reply('حدث خطأ فادح أثناء عملية الفحص.');
+        console.error("Fatal error in /activate_files command:", error);
+        await ctx.reply('حدث خطأ فادح أثناء العملية. يرجى مراجعة سجلات الأخطاء.');
     } finally {
         client.release();
     }
