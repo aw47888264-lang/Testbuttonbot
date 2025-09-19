@@ -711,8 +711,7 @@ bot.command('info', async (ctx) => {
             `, [targetId])
         ]);
 
-        const lastActive = botUserResult.rows[0]?.last_active;
-        const clicksToday = clicksTodayResult.rows[0]?.count || 0;
+        const lastActive = botUserResult.rows[0]?.last_active;        const clicksToday = clicksTodayResult.rows[0]?.count || 0;
         
         const buttonsVisited = buttonsVisitedResult.rows.length > 0 
             ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n\n') 
@@ -1185,16 +1184,19 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
 
             // ثانيًا، إذا كانت الرسالة استطلاعًا مباشرًا
+           // ثانيًا، إذا كانت الرسالة استطلاعًا مباشرًا
             if (ctx.message && ctx.message.poll && !ctx.message.forward_from && !ctx.message.forward_from_chat) {
                 try {
+                    // 1. Bot copies the poll to the current chat to get a stable reference.
                     const copiedMessage = await ctx.copyMessage(ctx.chat.id);
                     const { collectedMessages = [] } = stateData;
                     
                     const messageObject = {
                         is_poll: true,
-                        // ✨✨✨  هذا هو السطر الذي تم تصحيحه ✨✨✨
-                        from_chat_id: ctx.chat.id, // نستخدم ID المحادثة الحالية مباشرة
-                        message_id: copiedMessage.message_id // نأخذ فقط ID الرسالة الجديدة
+                        // 2. Use the current chat ID.
+                        from_chat_id: ctx.chat.id, 
+                        // 3. Use the message ID of the NEWLY copied message.
+                        message_id: copiedMessage.message_id 
                     };
 
                     const updatedMessages = [...collectedMessages, messageObject];
@@ -1203,7 +1205,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     await ctx.reply(`✅ تم اعتماد نسخة الاستطلاع التي أنشأها البوت (${updatedMessages.length}). أرسل المزيد أو اضغط "إنهاء".`);
                 
                 } catch(e) {
-                    console.error("Failed to auto-copy and save poll:", e);
+                    console.error("Failed to handle and copy poll:", e); // Updated error message for clarity
                     await ctx.reply('حدث خطأ أثناء معالجة الاستطلاع.');
                 }
                 return; 
