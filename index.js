@@ -382,8 +382,10 @@ async function generateKeyboard(userId) {
     }
 
     if (cachedButtons) {
+      console.log(`[Cache Hit] KEYBOARD for parent: ${parentId} | isAdmin: ${isAdmin}`);
         buttonsToRender = JSON.parse(cachedButtons);
     } else {
+      console.log(`[Cache Miss] KEYBOARD for parent: ${parentId} | isAdmin: ${isAdmin}`);
         // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
         let query, values;
         if (currentPath === 'root') {
@@ -491,8 +493,10 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
         }
 
         if (cachedMessages) {
+          console.log(`[Cache Hit] MESSAGES for button: ${buttonId}`);
             messages = JSON.parse(cachedMessages);
         } else {
+          console.log(`[Cache Miss] MESSAGES for button: ${buttonId}`);
             // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
             const messagesResult = await client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
             messages = messagesResult.rows;
