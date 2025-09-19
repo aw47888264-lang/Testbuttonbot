@@ -337,10 +337,9 @@ async function generateKeyboard(userId) {
     }
     
     // --- لوحة مفاتيح قسم الإشراف ---
-    // --- لوحة مفاتيح قسم الإشراف ---
     if (currentPath === 'supervision') {
         keyboardRows = [
-            ['📊 الإحصائيات'], // تم حذف زر الرسالة الجماعية
+            ['📊 الإحصائيات'],
             ['🔔 رسالة التنبيه', '📝 تعديل رسالة الترحيب'],
             ['⚙️ تعديل المشرفين', '🚫 قائمة المحظورين'],
             ['🔙 رجوع', '🔝 القائمة الرئيسية']
@@ -350,17 +349,39 @@ async function generateKeyboard(userId) {
 
     // --- بناء لوحة المفاتيح الرئيسية ---
     let buttonsToRender;
-    let query, values;
-    if (currentPath === 'root') {
-        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"';
-        values = [];
-    } else {
-        const parentId = currentPath.split('/').pop();
-        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"';
-        values = [parentId];
+    const parentId = currentPath === 'root' ? null : currentPath.split('/').pop();
+    
+    // 💡 1. محاولة قراءة قائمة الأزرار من الكاش بأمان
+    const cacheKey = `buttons:${parentId}:${isAdmin}`;
+    let cachedButtons = null;
+    try {
+        cachedButtons = await redis.get(cacheKey);
+    } catch (redisError) {
+        console.error(`[Cache Read Error] Failed to get key ${cacheKey}:`, redisError.message);
     }
-    const buttonsResult = await client.query(query, values);
-    buttonsToRender = buttonsResult.rows;
+
+    if (cachedButtons) {
+        buttonsToRender = JSON.parse(cachedButtons);
+    } else {
+        // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
+        let query, values;
+        if (currentPath === 'root') {
+            query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"';
+            values = [];
+        } else {
+            query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"';
+            values = [parentId];
+        }
+        const buttonsResult = await client.query(query, values);
+        buttonsToRender = buttonsResult.rows;
+
+        // 💡 2. محاولة التخزين في الكاش بأمان
+        try {
+            await redis.set(cacheKey, JSON.stringify(buttonsToRender), 'EX', 3600); // صلاحية ساعة
+        } catch (redisError) {
+            console.error(`[Cache Write Error] Failed to set key ${cacheKey}:`, redisError.message);
+        }
+    }
     
     let currentRow = [];
     buttonsToRender.forEach(button => {
@@ -392,10 +413,10 @@ async function generateKeyboard(userId) {
     // --- إضافة أزرار الإدارة ---
     if (isAdmin) {
         if (isAdmin && state === 'EDITING_BUTTONS') { 
-    keyboardRows.push(['➕ إضافة زر']);
-    keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
-    keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
-}
+            keyboardRows.push(['➕ إضافة زر']);
+            keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
+            keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
+        }
         const otherAdminActions = [];
         if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
             otherAdminActions.push('➕ إضافة رسالة');
@@ -433,11 +454,39 @@ async function generateKeyboard(userId) {
 
 // دالة لإرسال رسائل الزر (نسخة معدّلة)
 // دالة لإرسال رسائل الزر (نسخة نهائية بمعالج تنسيق مدمج)
+ // دالة لإرسال رسائل الزر (نسخة معدّلة وآمنة مع الكاش)
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const client = await getClient();
     try {
-        const messagesResult = await client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
-        const messages = messagesResult.rows;
+        let messages;
+        const cacheKey = `messages:${buttonId}`;
+        let cachedMessages = null;
+
+        // 💡 1. محاولة القراءة من الكاش بأمان
+        try {
+            cachedMessages = await redis.get(cacheKey);
+        } catch (redisError) {
+            console.error(`[Cache Read Error] Failed to get key ${cacheKey}:`, redisError.message);
+        }
+
+        if (cachedMessages) {
+            messages = JSON.parse(cachedMessages);
+        } else {
+            // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
+            const messagesResult = await client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
+            messages = messagesResult.rows;
+
+            // 💡 2. محاولة التخزين في الكاش بأمان للمرة القادمة
+            if (messages.length > 0) {
+                 try {
+                    await redis.set(cacheKey, JSON.stringify(messages), 'EX', 3600); // صلاحية ساعة
+                 } catch (redisError) {
+                    console.error(`[Cache Write Error] Failed to set key ${cacheKey}:`, redisError.message);
+                 }
+            }
+        }
+        
+        // ... باقي كود الدالة المسؤول عن إرسال الرسائل يبقى كما هو تمامًا ...
 
         if (messages.length === 0 && inEditMode) {
             if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
@@ -466,11 +515,7 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
             };
             let textToSend = message.content;
 
-            // ==========================================================
-            // |      =============== المنطق النهائي للتنسيق ===============      |
-            // ==========================================================
             if (message.entities && message.entities.length > 0) {
-                // إذا كانت entities موجودة (رسالة موجهة)، فهي الأولوية القصوى
                 if (message.type === 'text') {
                     options.entities = message.entities;
                 } else {
@@ -478,7 +523,6 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
                     options.caption_entities = message.entities;
                 }
             } else {
-                // إذا لم تكن entities موجودة (نص يدوي)، قم بتحويل Markdown إلى HTML وأرسل دائمًا كـ HTML
                 options.parse_mode = 'HTML';
                 if (message.type === 'text') {
                     textToSend = convertMarkdownToHtml(message.content);
