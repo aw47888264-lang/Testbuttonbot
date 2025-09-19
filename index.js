@@ -411,7 +411,7 @@ async function generateKeyboard(userId) {
 
     if (cachedButtons) {
       console.log(`[Cache Hit] KEYBOARD for parent: ${parentId} | isAdmin: ${isAdmin}`);
-        buttonsToRender = JSON.parse(cachedButtons);
+        buttonsToRender = cachedButtons;
     } else {
       console.log(`[Cache Miss] KEYBOARD for parent: ${parentId} | isAdmin: ${isAdmin}`);
         // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
@@ -522,7 +522,7 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
 
         if (cachedMessages) {
           console.log(`[Cache Hit] MESSAGES for button: ${buttonId}`);
-            messages = JSON.parse(cachedMessages);
+            messages = cachedMessages;
         } else {
           console.log(`[Cache Miss] MESSAGES for button: ${buttonId}`);
             // إذا فشلت القراءة أو لم توجد البيانات، اذهب لقاعدة البيانات
