@@ -818,6 +818,9 @@ bot.command('fix_all_files', async (ctx) => {
     }
 });
 // أمر جديد لبدء عملية الترحيل على دفعات
+const path = require('path'); // تأكد من وجود هذا السطر في بداية الملف
+
+// أمر جديد لبدء عملية الترحيل على دفعات مع الحفاظ على الأسماء والامتدادات
 bot.command('start_migration', async (ctx) => {
     const client = await getClient();
     try {
@@ -828,7 +831,7 @@ bot.command('start_migration', async (ctx) => {
         }
 
         const botA_Token = process.env.BOT_A_TOKEN;
-        const botB_Token = process.env.BOT_TOKEN; // التوكن الحالي للبوت
+        const botB_Token = process.env.BOT_TOKEN;
 
         if (!botA_Token) {
             return ctx.reply('⚠️ خطأ: لم يتم العثور على توكن البوت القديم. يرجى إضافته كمتغير بيئة باسم `BOT_A_TOKEN` في Vercel.');
@@ -842,10 +845,9 @@ bot.command('start_migration', async (ctx) => {
         let allMedia = stateData.migration_files;
         let currentIndex = stateData.migration_index || 0;
 
-        // إذا كانت هذه هي المرة الأولى لتشغيل الأمر
         if (!allMedia) {
             await ctx.reply('🔍 تم العثور على أمر جديد. جارٍ جلب قائمة الملفات من قاعدة البيانات لأول مرة...');
-            const mediaRes = await client.query(`SELECT id, content, type FROM public.messages WHERE type != 'text'`);
+            const mediaRes = await client.query(`SELECT id, content, type, caption FROM public.messages WHERE type != 'text'`);
             allMedia = mediaRes.rows;
             await updateUserState(userId, { stateData: { ...stateData, migration_files: allMedia, migration_index: 0 } });
             if (allMedia.length === 0) return ctx.reply('✅ لا توجد ملفات لمعالجتها.');
@@ -857,7 +859,7 @@ bot.command('start_migration', async (ctx) => {
             return ctx.reply('🎉🎉🎉 اكتملت عملية إصلاح جميع الملفات بنجاح!');
         }
 
-        const batchSize = 20; // معالجة 20 ملف في كل مرة
+        const batchSize = 20;
         const endOfBatch = Math.min(currentIndex + batchSize, totalFiles);
         
         await ctx.reply(`⏳ ستبدأ معالجة دفعة جديدة من الملفات (${currentIndex + 1} إلى ${endOfBatch}) من أصل ${totalFiles}. يرجى الانتظار...`);
@@ -868,18 +870,31 @@ bot.command('start_migration', async (ctx) => {
         for (let i = currentIndex; i < endOfBatch; i++) {
             const message = allMedia[i];
             try {
+                // 1. جلب تفاصيل الملف من البوت (أ) للحصول على الامتداد الأصلي
+                const fileDetails = await botA.telegram.getFile(message.content);
+                const originalExtension = path.extname(fileDetails.file_path || '');
+                
+                // 2. جلب رابط التحميل المؤقت
                 const fileLink = await botA.telegram.getFileLink(message.content);
                 
+                // 3. إنشاء اسم ملف معبر من الشرح
+                const baseFilename = (message.caption || `file_${message.id}`).substring(0, 50).replace(/[^\w\s\u0600-\u06FF.-]/g, '_');
+                const finalFilename = baseFilename + originalExtension;
+
+                // 4. رفع الملف بالاسم والامتداد الصحيحين
                 let sentMessage;
+                const extra_options = { caption: message.caption };
+
                 switch (message.type) {
-                    case 'photo': sentMessage = await botB.telegram.sendPhoto(userId, { url: fileLink.href }); break;
-                    case 'video': sentMessage = await botB.telegram.sendVideo(userId, { url: fileLink.href }); break;
-                    case 'document': sentMessage = await botB.telegram.sendDocument(userId, { url: fileLink.href }); break;
-                    case 'audio': sentMessage = await botB.telegram.sendAudio(userId, { url: fileLink.href }); break;
+                    case 'photo': sentMessage = await botB.telegram.sendPhoto(userId, { url: fileLink.href }, extra_options); break;
+                    case 'video': sentMessage = await botB.telegram.sendVideo(userId, { url: fileLink.href }, { ...extra_options, file_name: finalFilename }); break;
+                    case 'document': sentMessage = await botB.telegram.sendDocument(userId, { url: fileLink.href, filename: finalFilename }, extra_options); break;
+                    case 'audio': sentMessage = await botB.telegram.sendAudio(userId, { url: fileLink.href, filename: finalFilename }, extra_options); break;
                     case 'voice': sentMessage = await botB.telegram.sendVoice(userId, { url: fileLink.href }); break;
                     default: continue;
                 }
 
+                // 5. استخراج الـ ID الجديد وتحديث قاعدة البيانات
                 let newFileId;
                 if(sentMessage.photo) newFileId = sentMessage.photo.pop().file_id;
                 else if(sentMessage.video) newFileId = sentMessage.video.file_id;
@@ -896,7 +911,6 @@ bot.command('start_migration', async (ctx) => {
             }
         }
         
-        // تحديث المؤشر للدفعة التالية
         await updateUserState(userId, { stateData: { ...stateData, migration_index: endOfBatch } });
 
         let report = `🏁 اكتملت الدفعة الحالية.\n\n- ✅ نجاح: ${successCount}\n- ❌ فشل: ${failureCount}\n- 📈 التقدم: ${endOfBatch}/${totalFiles}\n\n`;
