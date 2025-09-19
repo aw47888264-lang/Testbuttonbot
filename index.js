@@ -22,7 +22,24 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // =================================================================
 // |                         Helper Functions (دوال مساعدة)                      |
 // =================================================================
+// دالة مساعدة لجلب المسار الكامل لزر معين
+async function getButtonPath(buttonId, client) {
+    let pathParts = [];
+    let currentButtonId = buttonId;
 
+    while (currentButtonId) {
+        const result = await client.query('SELECT text, parent_id FROM public.buttons WHERE id = $1', [currentButtonId]);
+        if (result.rows.length > 0) {
+            pathParts.unshift(result.rows[0].text); // unshift يضيف العنصر في بداية المصفوفة
+            currentButtonId = result.rows[0].parent_id;
+        } else {
+            break; // توقف إذا لم يتم العثور على الزر (لمنع حلقة لا نهائية)
+        }
+    }
+
+    pathParts.unshift('القائمة الرئيسية');
+    return pathParts.join(' > ');
+}
 // دالة لجلب اتصال من الـ Pooler
 async function getClient() {
     try {
@@ -713,7 +730,72 @@ const banUnbanHandler = async (ctx, banAction) => {
 
 bot.command('ban', (ctx) => banUnbanHandler(ctx, true));
 bot.command('unban', (ctx) => banUnbanHandler(ctx, false));
+bot.command('scan_errors', async (ctx) => {
+    const client = await getClient();
+    try {
+        const userId = String(ctx.from.id);
+        const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [userId]);
+        if (!userResult.rows[0]?.is_admin) return; // للمشرفين فقط
 
+        const statusMessage = await ctx.reply('🔍 جاري فحص جميع الملفات في قاعدة البيانات... هذه العملية قد تستغرق بعض الوقت.');
+
+        const mediaMessagesResult = await client.query(
+            `SELECT id, content, type, button_id FROM public.messages WHERE type != 'text'`
+        );
+        const allMediaMessages = mediaMessagesResult.rows;
+
+        if (allMediaMessages.length === 0) {
+            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا توجد أي ملفات في قاعدة البيانات لفحصها.');
+        }
+
+        let brokenFilePaths = [];
+        let checkedCount = 0;
+
+        for (const message of allMediaMessages) {
+            try {
+                // نستخدم طريقة خفيفة للتحقق من الملف دون إرساله
+                await bot.telegram.getFile(message.content);
+            } catch (e) {
+                // إذا فشلت، فهذا يعني أن الملف خاطئ
+                if (e.message.includes('file is invalid')) {
+                    const path = await getButtonPath(message.button_id, client);
+                    brokenFilePaths.push(path);
+                }
+            }
+            checkedCount++;
+            // تحديث الرسالة كل 50 ملف لتشعر المستخدم بالتقدم
+            if (checkedCount % 50 === 0) {
+                await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `🔍 جاري الفحص... (${checkedCount}/${allMediaMessages.length})`);
+            }
+        }
+
+        if (brokenFilePaths.length === 0) {
+            return ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ اكتمل الفحص! تم فحص ${allMediaMessages.length} ملف ولم يتم العثور على أي مشاكل.`);
+        }
+
+        // إزالة المسارات المكررة
+        const uniquePaths = [...new Set(brokenFilePaths)];
+
+        let reportMessage = `🚫 **تقرير الأخطاء** 🚫\n\nتم العثور على مشاكل في المسارات التالية:\n\n`;
+        uniquePaths.forEach((path, index) => {
+            reportMessage += `${index + 1}. \`${path}\`\n`;
+        });
+        
+        // إرسال التقرير النهائي
+        await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+        
+        // تقسيم الرسالة إذا كانت طويلة جدًا
+        for (let i = 0; i < reportMessage.length; i += 4096) {
+            await ctx.reply(reportMessage.substring(i, i + 4096));
+        }
+
+    } catch (error) {
+        console.error("Error in /scan_errors command:", error);
+        await ctx.reply('حدث خطأ فادح أثناء عملية الفحص.');
+    } finally {
+        client.release();
+    }
+});
 // أمر عرض معلومات المستخدم (يدعم الآن الرد أو استخدام الـ ID)
 bot.command('info', async (ctx) => {
     const client = await getClient();
