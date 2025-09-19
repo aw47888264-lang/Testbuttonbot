@@ -428,7 +428,7 @@ async function generateKeyboard(userId) {
 
         // 💡 2. محاولة التخزين في الكاش بأمان
         try {
-            await redis.set(cacheKey, JSON.stringify(buttonsToRender), 'EX', 3600); // صلاحية ساعة
+            await redis.set(cacheKey, JSON.stringify(buttonsToRender), { ex: 3600 }); // صلاحية ساعة
         } catch (redisError) {
             console.error(`[Cache Write Error] Failed to set key ${cacheKey}:`, redisError.message);
         }
@@ -532,7 +532,7 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
             // 💡 2. محاولة التخزين في الكاش بأمان للمرة القادمة
             if (messages.length > 0) {
                  try {
-                    await redis.set(cacheKey, JSON.stringify(messages), 'EX', 3600); // صلاحية ساعة
+                   await redis.set(cacheKey, JSON.stringify(messages), { ex: 3600 }); // صلاحية ساعة
                  } catch (redisError) {
                     console.error(`[Cache Write Error] Failed to set key ${cacheKey}:`, redisError.message);
                  }
