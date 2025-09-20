@@ -1250,17 +1250,28 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             return;
         }
 
-        if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
-            const duration = parseInt(ctx.message.text);
-            if (isNaN(duration) || duration <= 0) return ctx.reply('⚠️ يرجى إدخال رقم صحيح أكبر من صفر.');
-            const { alertMessages } = stateData;
-            await client.query(
-                `INSERT INTO public.settings (id, alert_message, alert_message_set_at, alert_duration_hours) VALUES (1, $1, NOW(), $2) ON CONFLICT (id) DO UPDATE SET alert_message = EXCLUDED.alert_message, alert_message_set_at = EXCLUDED.alert_message_set_at, alert_duration_hours = EXCLUDED.alert_duration_hours`,
-                [JSON.stringify(alertMessages), duration]
-            );
-            await updateUserState(userId, { state: 'NORMAL', currentPath: 'supervision' });
-            return ctx.reply(`✅ تم تفعيل التنبيه بنجاح لمدة ${duration} ساعة.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-        }
+       // استبدله بهذا الكود المُصحح
+if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
+    const duration = parseInt(ctx.message.text);
+    if (isNaN(duration) || duration <= 0) return ctx.reply('⚠️ يرجى إدخال رقم صحيح أكبر من صفر.');
+    const { alertMessages } = stateData;
+
+    // ✨ تعديل: تم إضافة unpin_job_triggered_at = NULL لإعادة تصفير حالة التنبيه
+    const query = `
+        INSERT INTO public.settings (id, alert_message, alert_message_set_at, alert_duration_hours, unpin_job_triggered_at) 
+        VALUES (1, $1, NOW(), $2, NULL) 
+        ON CONFLICT (id) 
+        DO UPDATE SET 
+            alert_message = EXCLUDED.alert_message, 
+            alert_message_set_at = EXCLUDED.alert_message_set_at, 
+            alert_duration_hours = EXCLUDED.alert_duration_hours,
+            unpin_job_triggered_at = NULL;
+    `;
+
+    await client.query(query, [JSON.stringify(alertMessages), duration]);
+    await updateUserState(userId, { state: 'NORMAL', currentPath: 'supervision' });
+    return ctx.reply(`✅ تم تفعيل التنبيه بنجاح لمدة ${duration} ساعة.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+}
       
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
