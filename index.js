@@ -193,7 +193,7 @@ async function trackSentMessages(userId, messageIds) {
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتحسب الأزرار النهائية فقط)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (بدون ترقيم رقمي)
-// ...
+// دالة لتجميع ومعالجة إحصائيات الأزرار (الإصدار النهائي بتنسيق الاقتباس فقط)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
@@ -206,55 +206,21 @@ async function processAndFormatTopButtons(interval) {
         let query;
 
         if (interval === 'daily') {
-            title = '🏆 *الأكثر استخداماً \\(اليوم\\) - حسب المستخدمين*';
+            title = '🏆 *الأكثر استخداماً \\(اليوم\\):*';
             query = `
-                -- الخطوة 1: بناء المسار الكامل لكل الأزرار في البوت
-                WITH RECURSIVE full_paths (id, path) AS (
-                    -- نبدأ بالأزرار الرئيسية التي ليس لها أب
-                    SELECT
-                        id,
-                        text
-                    FROM public.buttons
-                    WHERE parent_id IS NULL
-
-                    UNION ALL
-
-                    -- بشكل متكرر، نلحق اسم الزر الفرعي بمسار أبيه
-                    SELECT
-                        b.id,
-                        p.path || ' / ' || b.text
-                    FROM
-                        public.buttons b
-                    JOIN
-                        full_paths p ON b.parent_id = p.id
-                )
-                -- الخطوة 2: الآن نقوم بحساب الإحصائيات ودمجها مع المسارات
                 SELECT
-                    fp.path, -- ✅ هنا نستخدم المسار الكامل الذي بنيناه
-                    COUNT(DISTINCT l.user_id)::integer AS unique_users,
-                    COUNT(l.id)::integer AS clicks_count
-                FROM
-                    public.button_clicks_log l
-                JOIN
-                    public.buttons b ON b.id = l.button_id
-                JOIN
-                    full_paths fp ON l.button_id = fp.id
-                WHERE
-                    -- الشرط الزمني: إحصائيات اليوم فقط
-                    (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
-                    -- ✅ الشرط الجديد: إما أن يكون الزر في القائمة الرئيسية أو أن يكون زراً نهائياً
-                    AND (
-                        b.parent_id IS NULL -- هذا هو زر القائمة الرئيسية
-                        OR
-                        NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = b.id) -- وهذا هو الزر النهائي
-                    )
-                GROUP BY
-                    fp.path -- التجميع حسب المسار الكامل
-                ORDER BY
-                    unique_users DESC, clicks_count DESC -- الترتيب حسب المستخدمين ثم الضغطات
+                    b.text,
+                    COUNT(l.id)::integer AS clicks_count,
+                    COUNT(DISTINCT l.user_id)::integer AS unique_users
+                FROM public.button_clicks_log l
+                JOIN public.buttons b ON b.id = l.button_id
+                WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+                  AND NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = b.id)
+                GROUP BY b.text
+                ORDER BY clicks_count DESC
                 LIMIT 10;
             `;
-        } else { // All-Time (يبقى كما هو)
+        } else { // All-Time
             title = '🏆 *الأكثر استخداماً \\(الكلي\\):*';
             query = `
                 SELECT
@@ -281,10 +247,12 @@ async function processAndFormatTopButtons(interval) {
         if (rows.length === 0) return `${title}\nلا توجد بيانات لعرضها\\.`;
         
         const formattedRows = rows.map((row) => {
-            let userText = `\n   \\- 👤 المستخدمون: \`${row.unique_users || 0}\``;
-            
-            // ✅ تعديل بسيط هنا: نستخدم row.path بدلاً من row.text لعرض المسار الكامل
-            return `> *${escapeMarkdownV2(row.path)}*\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
+            let userText = '';
+            if (interval === 'daily') {
+                userText = `\n   \\- 👤 المستخدمون: \`${row.unique_users || 0}\``;
+            }
+            // ✨ التعديل هنا: إزالة النقطة \\- والإبقاء على الاقتباس > فقط
+            return `> *${escapeMarkdownV2(row.text)}*\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
         }).join('\n\n');
 
         return `${title}\n\n${formattedRows}`;
@@ -292,7 +260,6 @@ async function processAndFormatTopButtons(interval) {
         client.release();
     }
 }
-// ...
 
 // دالة لتحديث عرض المشرف (حذف الرسائل وإعادة إرسالها)
 async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '✅ تم تحديث العرض.') {
@@ -1283,28 +1250,17 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             return;
         }
 
-       // استبدله بهذا الكود المُصحح
-if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
-    const duration = parseInt(ctx.message.text);
-    if (isNaN(duration) || duration <= 0) return ctx.reply('⚠️ يرجى إدخال رقم صحيح أكبر من صفر.');
-    const { alertMessages } = stateData;
-
-    // ✨ تعديل: تم إضافة unpin_job_triggered_at = NULL لإعادة تصفير حالة التنبيه
-    const query = `
-        INSERT INTO public.settings (id, alert_message, alert_message_set_at, alert_duration_hours, unpin_job_triggered_at) 
-        VALUES (1, $1, NOW(), $2, NULL) 
-        ON CONFLICT (id) 
-        DO UPDATE SET 
-            alert_message = EXCLUDED.alert_message, 
-            alert_message_set_at = EXCLUDED.alert_message_set_at, 
-            alert_duration_hours = EXCLUDED.alert_duration_hours,
-            unpin_job_triggered_at = NULL;
-    `;
-
-    await client.query(query, [JSON.stringify(alertMessages), duration]);
-    await updateUserState(userId, { state: 'NORMAL', currentPath: 'supervision' });
-    return ctx.reply(`✅ تم تفعيل التنبيه بنجاح لمدة ${duration} ساعة.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-}
+        if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
+            const duration = parseInt(ctx.message.text);
+            if (isNaN(duration) || duration <= 0) return ctx.reply('⚠️ يرجى إدخال رقم صحيح أكبر من صفر.');
+            const { alertMessages } = stateData;
+            await client.query(
+                `INSERT INTO public.settings (id, alert_message, alert_message_set_at, alert_duration_hours) VALUES (1, $1, NOW(), $2) ON CONFLICT (id) DO UPDATE SET alert_message = EXCLUDED.alert_message, alert_message_set_at = EXCLUDED.alert_message_set_at, alert_duration_hours = EXCLUDED.alert_duration_hours`,
+                [JSON.stringify(alertMessages), duration]
+            );
+            await updateUserState(userId, { state: 'NORMAL', currentPath: 'supervision' });
+            return ctx.reply(`✅ تم تفعيل التنبيه بنجاح لمدة ${duration} ساعة.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+        }
       
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
